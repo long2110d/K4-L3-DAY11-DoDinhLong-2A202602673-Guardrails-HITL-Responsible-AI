@@ -11,6 +11,7 @@ Status convention (không dùng True/False mơ hồ):
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Literal
 
 from google.genai import types
@@ -51,14 +52,22 @@ def detect_injection(user_input: str) -> InputStatus:
     Returns:
         ``"BLOCK"`` if injection detected (chặn), ``"ALLOW"`` otherwise (cho qua).
     """
-    INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
-    ]
+    normalized_input = unicodedata.normalize("NFKC", user_input)
+    normalized_input = "".join(
+        char for char in normalized_input if unicodedata.category(char) != "Cf"
+    )
 
-    for pattern in INJECTION_PATTERNS:
-        if re.search(pattern, user_input, re.IGNORECASE):
+    injection_patterns = (
+        r"ignore\s+(?:all\s+)?(?:previous|above)\s+instructions?",
+        r"you\s+are\s+now\b",
+        r"system\s+prompt",
+        r"reveal\s+your\s+(?:instructions?|prompt)",
+        r"pretend\s+you\s+are\b",
+        r"act\s+as\s+(?:a\s+|an\s+)?unrestricted\b",
+    )
+
+    for pattern in injection_patterns:
+        if re.search(pattern, normalized_input, re.IGNORECASE):
             return "BLOCK"
     return "ALLOW"
 
@@ -84,14 +93,38 @@ def topic_filter(user_input: str) -> InputStatus:
         ``"BLOCK"`` = chặn (off-topic hoặc topic cấm).
         ``"ALLOW"`` = cho qua (câu banking hợp lệ).
     """
-    input_lower = user_input.lower()
+    normalized_input = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", user_input.casefold())
+        if not unicodedata.combining(char)
+    )
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return "BLOCK"
-    # 2. If input doesn't contain any allowed topic -> return "BLOCK"
-    # 3. Otherwise -> return "ALLOW"
+    def contains_term(term: str) -> bool:
+        normalized_term = "".join(
+            char
+            for char in unicodedata.normalize("NFKD", term.casefold())
+            if not unicodedata.combining(char)
+        )
+        expression = r"(?<!\w)" + re.escape(normalized_term).replace(r"\ ", r"\s+") + r"(?!\w)"
+        return re.search(expression, normalized_input) is not None
 
-    pass  # Replace with your implementation
+    suspicious_topics = (
+        "gian lận", "lừa đảo", "fraud", "scam", "phishing",
+        "đánh cắp thông tin xác thực", "đánh cắp thông tin đăng nhập",
+        "steal credentials", "credential theft", "chiếm đoạt tài khoản",
+        "xin thông tin bí mật", "thông tin bí mật", "bí mật nội bộ",
+        "api key", "secret key", "system prompt", "admin password",
+        "mật khẩu", "password", "credentials",
+        "jailbreak", "ignore previous instructions", "bỏ qua chỉ dẫn",
+        "pretend you are", "act as an unrestricted", "role-play as",
+        "đóng vai", "nhập vai",
+    )
+
+    if any(contains_term(topic) for topic in (*BLOCKED_TOPICS, *suspicious_topics)):
+        return "BLOCK"
+    if not any(contains_term(topic) for topic in ALLOWED_TOPICS):
+        return "BLOCK"
+    return "ALLOW"
 
 
 # ============================================================

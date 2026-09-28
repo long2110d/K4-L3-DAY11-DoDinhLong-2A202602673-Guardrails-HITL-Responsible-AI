@@ -41,12 +41,23 @@ def content_filter(response: str) -> dict:
 
     # PII patterns to check
     PII_PATTERNS = {
-        # TODO: Add regex patterns for:
-        # - VN phone number: r"0\d{9,10}"
-        # - Email: r"[\w.-]+@[\w.-]+\.[a-zA-Z]{2,}"
-        # - National ID (CMND/CCCD): r"\b\d{9}\b|\b\d{12}\b"
-        # - API key pattern: r"sk-[a-zA-Z0-9-]+"
-        # - Password pattern: r"password\s*[:=]\s*\S+"
+        "Vietnamese phone number": r"(?<!\d)0\d{9,10}(?!\d)",
+        "Email address": r"[\w.+-]+@[\w.-]+\.[a-zA-Z]{2,}",
+        "National ID": r"(?<!\d)(?:\d{9}|\d{12})(?!\d)",
+        "API key": r"\bsk-[a-zA-Z0-9-]+\b",
+        "Password": r"\bpassword\s*(?:is|[:=])\s*\S+",
+        "Database credential": (
+            r"\b(?:db|database)[ _-]?(?:password|pass|secret|key|token)"
+            r"\s*(?:is|[:=])\s*\S+"
+        ),
+        "Database connection string": (
+            r"\b(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis)://[^\s\"'<>]+"
+        ),
+        "Internal database host": (
+            r"\b(?:db|database)[.-][a-z0-9.-]+\.internal"
+            r"(?::\d{1,5})?\b"
+        ),
+        "Demo admin password": r"\badmin123\b",
     }
 
     for name, pattern in PII_PATTERNS.items():
@@ -172,16 +183,30 @@ class OutputGuardrailPlugin(base_plugin.BasePlugin):
         if not response_text:
             return llm_response
 
-        # TODO: Implement logic:
-        # 1. Call content_filter(response_text)
-        #    - If issues found: replace llm_response.content with redacted version
-        #    - Increment self.redacted_count
-        # 2. If use_llm_judge: call llm_safety_check(response_text)
-        #    - If unsafe: replace llm_response.content with a safe message
-        #    - Increment self.blocked_count
-        # 3. Return llm_response (possibly modified)
+        filtered = content_filter(response_text)
+        safe_text = filtered["redacted"]
 
-        return llm_response  # TODO: modify if needed
+        if filtered["issues"]:
+            self.redacted_count += 1
+            llm_response.content = types.Content(
+                role="model",
+                parts=[types.Part.from_text(text=safe_text)],
+            )
+
+        if self.use_llm_judge:
+            judge_result = await llm_safety_check(safe_text)
+            if not judge_result["safe"]:
+                self.blocked_count += 1
+                llm_response.content = types.Content(
+                    role="model",
+                    parts=[
+                        types.Part.from_text(
+                            text="Xin lỗi, tôi không thể cung cấp nội dung này vì lý do an toàn."
+                        )
+                    ],
+                )
+
+        return llm_response
 
 
 # ============================================================
